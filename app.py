@@ -3005,6 +3005,77 @@ def post_process_word_toc_and_headers(wdoc, font_name=REPORT_FONT_NAME):
             pass
 
 
+@st.cache_resource
+def setup_linux_fonts_once():
+    """
+    ค้นหาไฟล์ฟอนต์ .ttf (เช่น THSarabunPSK.ttf) ที่วางอยู่ในโฟลเดอร์โปรเจ็กต์บน GitHub
+    แล้วติดตั้งเข้าสู่ระบบ Linux ของ Streamlit Cloud อัตโนมัติ เพื่อให้ PDF แสดงฟอนต์ตรงตามต้นฉบับ
+    """
+    if WORD_COM_AVAILABLE:
+        return True
+    try:
+        user_font_dir = os.path.expanduser("~/.local/share/fonts")
+        os.makedirs(user_font_dir, exist_ok=True)
+        
+        # ค้นหาไฟล์ .ttf ในโฟลเดอร์หลัก หรือโฟลเดอร์ fonts/
+        search_dirs = [".", "fonts"]
+        copied_any = False
+        for s_dir in search_dirs:
+            if os.path.isdir(s_dir):
+                for fname in os.listdir(s_dir):
+                    if fname.lower().endswith(".ttf"):
+                        src_path = os.path.join(s_dir, fname)
+                        dst_path = os.path.join(user_font_dir, fname)
+                        if not os.path.exists(dst_path):
+                            shutil.copy2(src_path, dst_path)
+                            copied_any = True
+        if copied_any:
+            subprocess.run(["fc-cache", "-f", user_font_dir], check=False, timeout=20)
+        return True
+    except Exception:
+        return False
+
+
+def convert_docx_to_pdf_linux(docx_bytes):
+    """
+    แปลงไฟล์ Word (.docx) เป็น PDF (.pdf) บน Streamlit Cloud (Linux) ด้วย LibreOffice
+    โดยแยกโฟลเดอร์โปรไฟล์ชั่วคราว (-env:UserInstallation) เพื่อรองรับนักเรียนใช้งานพร้อมกันหลายคน
+    """
+    soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice_bin:
+        return None
+
+    setup_linux_fonts_once()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        docx_path = os.path.join(tmpdir, "report_full.docx")
+        pdf_path = os.path.join(tmpdir, "report_full.pdf")
+        profile_dir = os.path.join(tmpdir, "lo_profile")
+        profile_uri = f"file://{profile_dir}"
+
+        with open(docx_path, "wb") as f:
+            f.write(docx_bytes)
+
+        cmd = [
+            soffice_bin,
+            f"-env:UserInstallation={profile_uri}",
+            "--headless",
+            "--nologo",
+            "--nofirststartwizard",
+            "--convert-to",
+            "pdf:writer_pdf_Export",
+            "--outdir",
+            tmpdir,
+            docx_path
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
+
+        if os.path.exists(pdf_path):
+            with open(pdf_path, "rb") as f:
+                return f.read()
+    return None
+
+
 def generate_docx_and_pdf_bytes(
     group_data,
     font_name,
@@ -3024,9 +3095,7 @@ def generate_docx_and_pdf_bytes(
 ):
     """
     บันทึกเป็นไฟล์ Word (.docx) และแปลงเป็นไฟล์ PDF (.pdf)
-    รองรับทั้ง:
-    1. เครื่องคอมพิวเตอร์ Windows ที่มี Microsoft Word (WORD_COM_AVAILABLE)
-    2. เซิร์ฟเวอร์ออนไลน์ Streamlit Community Cloud (Linux LibreOffice)
+    รองรับทั้ง Windows (Microsoft Word) และ Streamlit Community Cloud (Linux LibreOffice)
     """
     doc = build_report_docx(
         group_data, font_name, cover_size, logo_width_cm,
@@ -3076,22 +3145,9 @@ def generate_docx_and_pdf_bytes(
                         pdf_bytes = f.read()
         except Exception as e:
             st.warning(f"สร้างไฟล์ Word สำเร็จ แต่ไม่สามารถอัปเดตผ่าน Word อัตโนมัติได้ (สาเหตุ: {e})")
-    elif LIBREOFFICE_PATH is not None:
-        # กรณีรันบน Streamlit Community Cloud (Linux) ใช้ LibreOffice แปลงเป็น PDF อัตโนมัติ
+    elif (shutil.which("soffice") or shutil.which("libreoffice")) is not None:
         try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                docx_path = os.path.join(tmpdir, "report_full.docx")
-                pdf_path = os.path.join(tmpdir, "report_full.pdf")
-                with open(docx_path, "wb") as f:
-                    f.write(docx_bytes)
-                subprocess.run(
-                    [LIBREOFFICE_PATH, "--headless", "--convert-to", "pdf", "--outdir", tmpdir, docx_path],
-                    check=True,
-                    timeout=60
-                )
-                if os.path.exists(pdf_path):
-                    with open(pdf_path, "rb") as f:
-                        pdf_bytes = f.read()
+            pdf_bytes = convert_docx_to_pdf_linux(docx_bytes)
         except Exception as e:
             st.warning(f"สร้างไฟล์ Word สำเร็จ แต่ไม่สามารถแปลง PDF บน Cloud ได้ (สาเหตุ: {e})")
     elif DOCX2PDF_AVAILABLE:
