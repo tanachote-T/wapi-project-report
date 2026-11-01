@@ -3008,19 +3008,15 @@ def post_process_word_toc_and_headers(wdoc, font_name=REPORT_FONT_NAME):
 @st.cache_resource
 def setup_linux_fonts_once():
     """
-    ค้นหาไฟล์ฟอนต์ .ttf (เช่น THSarabunPSK.ttf) ที่วางอยู่ในโฟลเดอร์โปรเจ็กต์บน GitHub
-    แล้วติดตั้งเข้าสู่ระบบ Linux ของ Streamlit Cloud อัตโนมัติ เพื่อให้ PDF แสดงฟอนต์ตรงตามต้นฉบับ
+    คัดลอกไฟล์ฟอนต์ .ttf (เช่น THSarabunPSK.ttf) ที่อัปโหลดไว้บน GitHub
+    เข้าสู่โฟลเดอร์ฟอนต์ของระบบ Linux บน Streamlit Cloud อัตโนมัติ
     """
     if WORD_COM_AVAILABLE:
         return True
     try:
         user_font_dir = os.path.expanduser("~/.local/share/fonts")
         os.makedirs(user_font_dir, exist_ok=True)
-        
-        # ค้นหาไฟล์ .ttf ในโฟลเดอร์หลัก หรือโฟลเดอร์ fonts/
-        search_dirs = [".", "fonts"]
-        copied_any = False
-        for s_dir in search_dirs:
+        for s_dir in [".", "fonts"]:
             if os.path.isdir(s_dir):
                 for fname in os.listdir(s_dir):
                     if fname.lower().endswith(".ttf"):
@@ -3028,19 +3024,13 @@ def setup_linux_fonts_once():
                         dst_path = os.path.join(user_font_dir, fname)
                         if not os.path.exists(dst_path):
                             shutil.copy2(src_path, dst_path)
-                            copied_any = True
-        if copied_any:
-            subprocess.run(["fc-cache", "-f", user_font_dir], check=False, timeout=20)
         return True
     except Exception:
         return False
 
 
 def convert_docx_to_pdf_linux(docx_bytes):
-    """
-    แปลงไฟล์ Word (.docx) เป็น PDF (.pdf) บน Streamlit Cloud (Linux) ด้วย LibreOffice
-    โดยแยกโฟลเดอร์โปรไฟล์ชั่วคราว (-env:UserInstallation) เพื่อรองรับนักเรียนใช้งานพร้อมกันหลายคน
-    """
+    """แปลงไฟล์ Word เป็น PDF บน Streamlit Cloud ด้วย LibreOffice"""
     soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice_bin:
         return None
@@ -3060,8 +3050,6 @@ def convert_docx_to_pdf_linux(docx_bytes):
             soffice_bin,
             f"-env:UserInstallation={profile_uri}",
             "--headless",
-            "--nologo",
-            "--nofirststartwizard",
             "--convert-to",
             "pdf:writer_pdf_Export",
             "--outdir",
@@ -3073,6 +3061,29 @@ def convert_docx_to_pdf_linux(docx_bytes):
         if os.path.exists(pdf_path):
             with open(pdf_path, "rb") as f:
                 return f.read()
+    return None
+
+
+def convert_docx_to_pdf_via_gas(docx_bytes, web_app_url):
+    """
+    แปลงไฟล์ Word เป็น PDF ผ่าน Google Apps Script Web App
+    (ทำงานได้บน Streamlit Cloud โดยไม่ต้องมีไฟล์ packages.txt!)
+    """
+    if not web_app_url:
+        return None
+    try:
+        b64_docx = base64.b64encode(docx_bytes).decode("utf-8")
+        payload = {
+            "action": "convertDocxToPdf",
+            "docxBase64": b64_docx
+        }
+        resp = requests.post(web_app_url.strip(), json=payload, timeout=45)
+        resp.raise_for_status()
+        res_json = resp.json()
+        if res_json.get("success") and res_json.get("pdfBase64"):
+            return base64.b64decode(res_json["pdfBase64"])
+    except Exception:
+        return None
     return None
 
 
@@ -3094,8 +3105,10 @@ def generate_docx_and_pdf_bytes(
     strip_advisor_honorific
 ):
     """
-    บันทึกเป็นไฟล์ Word (.docx) และแปลงเป็นไฟล์ PDF (.pdf)
-    รองรับทั้ง Windows (Microsoft Word) และ Streamlit Community Cloud (Linux LibreOffice)
+    สร้างไฟล์ Word (.docx) และแปลงเป็นไฟล์ PDF (.pdf) อัตโนมัติ 3 ช่องทาง:
+    1. Microsoft Word (เมื่อรันบนเครื่อง Windows)
+    2. LibreOffice (เมื่อรันบน Streamlit Cloud ที่มี packages.txt)
+    3. Google Apps Script API (เมื่อรันบน Streamlit Cloud ที่ไม่มี packages.txt)
     """
     doc = build_report_docx(
         group_data, font_name, cover_size, logo_width_cm,
@@ -3110,6 +3123,8 @@ def generate_docx_and_pdf_bytes(
     docx_bytes = docx_buffer.getvalue()
     
     pdf_bytes = None
+
+    # ช่องทางที่ 1: ใช้ Microsoft Word บนเครื่อง Windows
     if WORD_COM_AVAILABLE:
         try:
             pythoncom.CoInitialize()
@@ -3144,27 +3159,19 @@ def generate_docx_and_pdf_bytes(
                     with open(pdf_path, "rb") as f:
                         pdf_bytes = f.read()
         except Exception as e:
-            st.warning(f"สร้างไฟล์ Word สำเร็จ แต่ไม่สามารถอัปเดตผ่าน Word อัตโนมัติได้ (สาเหตุ: {e})")
-    elif (shutil.which("soffice") or shutil.which("libreoffice")) is not None:
+            st.warning(f"ไม่สามารถแปลง PDF ผ่าน Microsoft Word ได้ (สาเหตุ: {e})")
+
+    # ช่องทางที่ 2: ใช้ LibreOffice บน Streamlit Cloud (ถ้ามี packages.txt)
+    if pdf_bytes is None and (shutil.which("soffice") or shutil.which("libreoffice")) is not None:
         try:
             pdf_bytes = convert_docx_to_pdf_linux(docx_bytes)
-        except Exception as e:
-            st.warning(f"สร้างไฟล์ Word สำเร็จ แต่ไม่สามารถแปลง PDF บน Cloud ได้ (สาเหตุ: {e})")
-    elif DOCX2PDF_AVAILABLE:
-        try:
-            pythoncom.CoInitialize()
-            with tempfile.TemporaryDirectory() as tmpdir:
-                docx_path = os.path.join(tmpdir, "report_full.docx")
-                pdf_path = os.path.join(tmpdir, "report_full.pdf")
-                with open(docx_path, "wb") as f:
-                    f.write(docx_bytes)
-                convert(docx_path, pdf_path)
-                if os.path.exists(pdf_path):
-                    with open(pdf_path, "rb") as f:
-                        pdf_bytes = f.read()
-        except Exception as e:
-            st.warning(f"สร้างไฟล์ Word สำเร็จ แต่ไม่สามารถแปลงเป็น PDF ได้ (สาเหตุ: {e})")
-            
+        except Exception:
+            pdf_bytes = None
+
+    # ช่องทางที่ 3: ใช้ Google Apps Script แปลงเป็น PDF (ไม่ต้องมี packages.txt)
+    if pdf_bytes is None:
+        pdf_bytes = convert_docx_to_pdf_via_gas(docx_bytes, DEFAULT_WEB_APP_URL)
+
     return docx_bytes, pdf_bytes
 
 
