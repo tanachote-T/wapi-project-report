@@ -1,4 +1,0 @@
-libreoffice-writer
-libreoffice-core
-fonts-tlwg-sarabun
-fontconfig
