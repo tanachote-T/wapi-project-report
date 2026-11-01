@@ -30,7 +30,7 @@ try:
 except ImportError:
     THAI_TOKENIZER_AVAILABLE = False
 
-# ตรวจสอบไลบรารีเชื่อมต่อ Microsoft Word (สำหรับ Windows)
+# ตรวจสอบไลบรารีเชื่อมต่อ Microsoft Word (สำหรับ Windows บนเครื่องคุณครู)
 try:
     import pythoncom
     import win32com.client
@@ -43,10 +43,6 @@ try:
     DOCX2PDF_AVAILABLE = True
 except ImportError:
     DOCX2PDF_AVAILABLE = False
-
-# ตรวจสอบโปรแกรม LibreOffice (สำหรับแปลง PDF บน Streamlit Cloud / Linux)
-LIBREOFFICE_PATH = shutil.which("soffice") or shutil.which("libreoffice")
-PDF_SUPPORT = WORD_COM_AVAILABLE or DOCX2PDF_AVAILABLE or (LIBREOFFICE_PATH is not None)
 
 # ==========================================================
 # ส่วนที่ 1: ตัวแปรตั้งค่าพื้นฐาน (คุณครูสามารถปรับเปลี่ยนได้)
@@ -275,12 +271,7 @@ def render_footer():
 # ส่วนที่ 2: ฟังก์ชันสร้างชื่อไฟล์ดาวน์โหลด ดึงข้อมูล และระบบตัดคำภาษาไทย
 # ==========================================================
 def extract_room_number_only(room_raw):
-    """
-    สกัดเฉพาะตัวเลขห้องเรียน เช่น:
-    - '5/12' หรือ 'ม.5/12' -> '12'
-    - '5/5' -> '5'
-    - '12' -> '12'
-    """
+    """สกัดเฉพาะตัวเลขห้องเรียน เช่น '5/12' -> '12'"""
     r = str(room_raw or "").strip()
     if not r or r == "-":
         return "ไม่ระบุห้อง"
@@ -288,16 +279,14 @@ def extract_room_number_only(room_raw):
         parts = r.split("/")
         last_part = parts[-1].strip()
         return last_part if last_part else r
-    # กรณีไม่มีเครื่องหมาย / ให้ดึงตัวเลขออกมา
     nums = re.findall(r"\d+", r)
     return nums[-1] if nums else r
 
 
 def build_export_filename(group_data, extension="pdf"):
     """
-    ข้อ 1 (ใหม่): สร้างชื่อไฟล์ดาวน์โหลด (ทั้ง Word และ PDF) ในรูปแบบ:
+    สร้างชื่อไฟล์ดาวน์โหลดในรูปแบบ:
     'โครงงานอาชีพ เรื่อง (ชื่อโครงงาน) ชั้นมัธยมศึกษาปีที่ 5 ห้อง (เลขห้อง).นามสกุลไฟล์'
-    เช่น 'โครงงานอาชีพ เรื่อง การศึกษาและทำขนมพระพาย ชั้นมัธยมศึกษาปีที่ 5 ห้อง 12.pdf'
     """
     progress_steps = group_data.get("progress", {}).get("steps", {})
     step1_data = (progress_steps.get("1") or progress_steps.get(1) or {}).get("data", {})
@@ -309,7 +298,6 @@ def build_export_filename(group_data, extension="pdf"):
         or "ไม่ระบุชื่อเรื่อง"
     )
     clean_title = clean_single_line_text(raw_title)
-    # ตัดคำว่า "เรื่อง" ด้านหน้าออกหากนักเรียนเผลอพิมพ์คำว่า "เรื่อง" ซ้ำมาในช่องชื่อโครงงาน
     clean_title = re.sub(r"^เรื่อง\s*", "", clean_title).strip()
 
     members = group_data.get("members", [])
@@ -317,7 +305,6 @@ def build_export_filename(group_data, extension="pdf"):
     room_num_str = extract_room_number_only(first_room_raw)
 
     base_name = f"โครงงานอาชีพ เรื่อง {clean_title} ชั้นมัธยมศึกษาปีที่ 5 ห้อง {room_num_str}"
-    # ลบอักขระต้องห้ามของชื่อไฟล์ในระบบปฏิบัติการ Windows / macOS / iPadOS
     safe_base_name = re.sub(r'[\\/*?:"<>|]', "", base_name).strip()
     clean_ext = str(extension).lstrip(".")
     return f"{safe_base_name}.{clean_ext}"
@@ -435,7 +422,7 @@ def estimate_paragraph_lines(text, first_line_indent_cm=1.5, left_indent_cm=0.0)
 
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_all_groups_from_gas(web_app_url):
-    """ดึงข้อมูลทุกกลุ่มจาก Google Sheets ผ่านพารามิเตอร์ ?page=api (จำข้อมูลไว้ 2 นาทีเพื่อความรวดเร็วเมื่อใช้หลายคน)"""
+    """ดึงข้อมูลทุกกลุ่มจาก Google Sheets ผ่านพารามิเตอร์ ?page=api"""
     clean_url = web_app_url.strip()
     if not clean_url:
         return {"success": False, "message": "กรุณาวาง URL ของเว็บแอป Google Apps Script ในแถบด้านซ้ายมือก่อนครับ"}
@@ -3005,86 +2992,27 @@ def post_process_word_toc_and_headers(wdoc, font_name=REPORT_FONT_NAME):
             pass
 
 
-@st.cache_resource
-def setup_linux_fonts_once():
-    """
-    คัดลอกไฟล์ฟอนต์ .ttf (เช่น THSarabunPSK.ttf) ที่อัปโหลดไว้บน GitHub
-    เข้าสู่โฟลเดอร์ฟอนต์ของระบบ Linux บน Streamlit Cloud อัตโนมัติ
-    """
-    if WORD_COM_AVAILABLE:
-        return True
-    try:
-        user_font_dir = os.path.expanduser("~/.local/share/fonts")
-        os.makedirs(user_font_dir, exist_ok=True)
-        for s_dir in [".", "fonts"]:
-            if os.path.isdir(s_dir):
-                for fname in os.listdir(s_dir):
-                    if fname.lower().endswith(".ttf"):
-                        src_path = os.path.join(s_dir, fname)
-                        dst_path = os.path.join(user_font_dir, fname)
-                        if not os.path.exists(dst_path):
-                            shutil.copy2(src_path, dst_path)
-        return True
-    except Exception:
-        return False
-
-
-def convert_docx_to_pdf_linux(docx_bytes):
-    """แปลงไฟล์ Word เป็น PDF บน Streamlit Cloud ด้วย LibreOffice"""
-    soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
-    if not soffice_bin:
-        return None
-
-    setup_linux_fonts_once()
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        docx_path = os.path.join(tmpdir, "report_full.docx")
-        pdf_path = os.path.join(tmpdir, "report_full.pdf")
-        profile_dir = os.path.join(tmpdir, "lo_profile")
-        profile_uri = f"file://{profile_dir}"
-
-        with open(docx_path, "wb") as f:
-            f.write(docx_bytes)
-
-        cmd = [
-            soffice_bin,
-            f"-env:UserInstallation={profile_uri}",
-            "--headless",
-            "--convert-to",
-            "pdf:writer_pdf_Export",
-            "--outdir",
-            tmpdir,
-            docx_path
-        ]
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
-
-        if os.path.exists(pdf_path):
-            with open(pdf_path, "rb") as f:
-                return f.read()
-    return None
-
-
 def convert_docx_to_pdf_via_gas(docx_bytes, web_app_url):
     """
-    แปลงไฟล์ Word เป็น PDF ผ่าน Google Apps Script Web App
-    (ทำงานได้บน Streamlit Cloud โดยไม่ต้องมีไฟล์ packages.txt!)
+    วิธีที่ 1: ส่งไฟล์ Word (.docx) ไปแปลงเป็นไฟล์ PDF (.pdf) ผ่าน Google Apps Script (doPost)
+    ทำงานบน Streamlit Cloud ได้ 100% โดยไม่ต้องมีไฟล์ packages.txt
     """
     if not web_app_url:
-        return None
+        return None, "ไม่พบลิงก์ Web App URL"
     try:
         b64_docx = base64.b64encode(docx_bytes).decode("utf-8")
         payload = {
             "action": "convertDocxToPdf",
             "docxBase64": b64_docx
         }
-        resp = requests.post(web_app_url.strip(), json=payload, timeout=45)
+        resp = requests.post(web_app_url.strip(), json=payload, timeout=60)
         resp.raise_for_status()
         res_json = resp.json()
         if res_json.get("success") and res_json.get("pdfBase64"):
-            return base64.b64decode(res_json["pdfBase64"])
-    except Exception:
-        return None
-    return None
+            return base64.b64decode(res_json["pdfBase64"]), None
+        return None, res_json.get("message", "Google Apps Script ไม่สามารถแปลงไฟล์เป็น PDF ได้")
+    except Exception as e:
+        return None, f"การเชื่อมต่อระบบแปลง PDF ขัดข้อง: {e}"
 
 
 def generate_docx_and_pdf_bytes(
@@ -3102,13 +3030,13 @@ def generate_docx_and_pdf_bytes(
     ch2_sub_numbering,
     max_table_rows_per_page,
     middle_edu_label,
-    strip_advisor_honorific
+    strip_advisor_honorific,
+    web_app_url=DEFAULT_WEB_APP_URL
 ):
     """
-    สร้างไฟล์ Word (.docx) และแปลงเป็นไฟล์ PDF (.pdf) อัตโนมัติ 3 ช่องทาง:
-    1. Microsoft Word (เมื่อรันบนเครื่อง Windows)
-    2. LibreOffice (เมื่อรันบน Streamlit Cloud ที่มี packages.txt)
-    3. Google Apps Script API (เมื่อรันบน Streamlit Cloud ที่ไม่มี packages.txt)
+    สร้างไฟล์ Word (.docx) และแปลงเป็นไฟล์ PDF (.pdf):
+    - หากรันบนเครื่องคอมพิวเตอร์ Windows: ใช้ Microsoft Word แปลงเป็น PDF
+    - หากรันบน Streamlit Cloud: ส่งไปแปลงเป็น PDF ผ่าน Google Apps Script (วิธีที่ 1)
     """
     doc = build_report_docx(
         group_data, font_name, cover_size, logo_width_cm,
@@ -3123,8 +3051,9 @@ def generate_docx_and_pdf_bytes(
     docx_bytes = docx_buffer.getvalue()
     
     pdf_bytes = None
+    gas_err_msg = None
 
-    # ช่องทางที่ 1: ใช้ Microsoft Word บนเครื่อง Windows
+    # 1. กรณีรันบนเครื่องคอมพิวเตอร์ที่มี Microsoft Word
     if WORD_COM_AVAILABLE:
         try:
             pythoncom.CoInitialize()
@@ -3159,18 +3088,17 @@ def generate_docx_and_pdf_bytes(
                     with open(pdf_path, "rb") as f:
                         pdf_bytes = f.read()
         except Exception as e:
-            st.warning(f"ไม่สามารถแปลง PDF ผ่าน Microsoft Word ได้ (สาเหตุ: {e})")
+            gas_err_msg = str(e)
 
-    # ช่องทางที่ 2: ใช้ LibreOffice บน Streamlit Cloud (ถ้ามี packages.txt)
-    if pdf_bytes is None and (shutil.which("soffice") or shutil.which("libreoffice")) is not None:
-        try:
-            pdf_bytes = convert_docx_to_pdf_linux(docx_bytes)
-        except Exception:
-            pdf_bytes = None
-
-    # ช่องทางที่ 3: ใช้ Google Apps Script แปลงเป็น PDF (ไม่ต้องมี packages.txt)
+    # 2. กรณีรันบน Streamlit Cloud: ใช้วิธีที่ 1 แปลง PDF ผ่าน Google Apps Script
     if pdf_bytes is None:
-        pdf_bytes = convert_docx_to_pdf_via_gas(docx_bytes, DEFAULT_WEB_APP_URL)
+        pdf_bytes, gas_err_msg = convert_docx_to_pdf_via_gas(docx_bytes, web_app_url)
+
+    if pdf_bytes is None and gas_err_msg:
+        st.info(
+            f"💡 **สร้างไฟล์ Word (.docx) สำเร็จเรียบร้อยแล้ว!** "
+            f"(หมายเหตุระบบแปลง PDF ออนไลน์: {gas_err_msg} — คุณครูสามารถเพิ่มฟังก์ชัน `doPost` และเปิดบริการ `Drive API` ในไฟล์ `รหัส.gs` เพื่อเปิดใช้งานการแปลง PDF อัตโนมัติได้ทันทีครับ)"
+        )
 
     return docx_bytes, pdf_bytes
 
@@ -3317,7 +3245,6 @@ else:
         members_list = active_group.get("members", [])
         advisors_disp = ", ".join(s1_data.get("advisors", ["นายธนโชติ จันทรังษี"]))
 
-        # ตัวอย่างชื่อไฟล์ที่จะได้เมื่อกดดาวน์โหลด
         preview_pdf_filename = build_export_filename(active_group, "pdf")
 
         members_badges_html = "".join([
@@ -3355,7 +3282,8 @@ else:
                     ch2_sub_numbering=ch2_subnum_opt,
                     max_table_rows_per_page=max_rows_page,
                     middle_edu_label=mid_edu_label_opt,
-                    strip_advisor_honorific=strip_hon_opt
+                    strip_advisor_honorific=strip_hon_opt,
+                    web_app_url=web_app_url_input
                 )
                 st.session_state["report_docx"] = docx_b
                 st.session_state["report_pdf"] = pdf_b
@@ -3366,17 +3294,17 @@ else:
             docx_fname = st.session_state.get("export_docx_filename", "โครงงานอาชีพ.docx")
             pdf_fname = st.session_state.get("export_pdf_filename", "โครงงานอาชีพ.pdf")
 
-            if st.session_state.get("report_pdf"):
-                dl_col1, dl_col2 = st.columns(2)
-                with dl_col1:
-                    st.download_button(
-                        label=f"📥 ดาวน์โหลด Word: {docx_fname}",
-                        data=st.session_state["report_docx"],
-                        file_name=docx_fname,
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True
-                    )
-                with dl_col2:
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                st.download_button(
+                    label=f"📥 ดาวน์โหลด Word: {docx_fname}",
+                    data=st.session_state["report_docx"],
+                    file_name=docx_fname,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+            with dl_col2:
+                if st.session_state.get("report_pdf"):
                     st.download_button(
                         label=f"📕 ดาวน์โหลด PDF: {pdf_fname}",
                         data=st.session_state["report_pdf"],
@@ -3384,17 +3312,6 @@ else:
                         mime="application/pdf",
                         use_container_width=True
                     )
-                st.subheader("🔍 ตัวอย่างเอกสารรายงานโครงงานอาชีพ (PDF Preview)")
-                display_pdf_preview(st.session_state["report_pdf"])
-            else:
-                st.success("✅ สร้างไฟล์เอกสารรายงานโครงงานอาชีพเรียบร้อยแล้ว! กดปุ่มด้านล่างเพื่อดาวน์โหลดไฟล์ได้เลยครับ")
-                st.download_button(
-                    label=f"📥 ดาวน์โหลดเอกสารรายงาน Word (.docx): {docx_fname}",
-                    data=st.session_state["report_docx"],
-                    file_name=docx_fname,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True
-                )
             
             if st.session_state.get("report_pdf"):
                 st.subheader("🔍 ตัวอย่างเอกสารรายงานโครงงานอาชีพ (PDF Preview)")
