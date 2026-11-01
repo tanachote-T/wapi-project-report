@@ -3104,10 +3104,154 @@ def generate_docx_and_pdf_bytes(
 
 
 def display_pdf_preview(pdf_bytes):
-    """แสดงหน้าต่าง Preview PDF บนหน้าเว็บ"""
+    """
+    แสดงหน้าต่างตัวอย่างเอกสาร PDF (PDF Preview) บนหน้าเว็บ:
+    - ใช้ระบบแปลง Base64 เป็น Blob URL ในฝั่งเบราว์เซอร์ ทำให้แสดงไฟล์ PDF ขนาดใหญ่ที่มีรูปภาพหลายหน้าได้ครบ 100%
+    - มีปุ่มสลับโหมดแสดงผลสำหรับ iPad/มือถือ (โหมด PDF.js Canvas) ในตัว
+    """
+    import streamlit.components.v1 as components
+
     b64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-    pdf_html = f'<iframe src="data:application/pdf;base64,{b64_pdf}" width="100%" height="850" style="border-radius: 12px; border: 1px solid #cbd5e1;" type="application/pdf"></iframe>'
-    st.markdown(pdf_html, unsafe_allow_html=True)
+    viewer_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                font-family: 'IBM Plex Sans Thai', sans-serif;
+                background-color: #f8fafc;
+            }}
+            .toolbar {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                background: #0f2942;
+                color: #ffffff;
+                padding: 10px 16px;
+                border-radius: 10px 10px 0 0;
+                font-size: 14px;
+            }}
+            .btn-group button {{
+                background: #ffffff;
+                color: #0f2942;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 6px;
+                font-weight: 600;
+                cursor: pointer;
+                margin-left: 6px;
+                font-size: 13px;
+            }}
+            .btn-group button:hover {{
+                background: #e2e8f0;
+            }}
+            #pdf-iframe {{
+                width: 100%;
+                height: 820px;
+                border: 1px solid #cbd5e1;
+                border-top: none;
+                border-radius: 0 0 10px 10px;
+                background: #525659;
+            }}
+            #canvas-container {{
+                display: none;
+                width: 100%;
+                height: 820px;
+                overflow-y: auto;
+                background: #475569;
+                padding: 16px 0;
+                text-align: center;
+                border: 1px solid #cbd5e1;
+                border-top: none;
+                border-radius: 0 0 10px 10px;
+                box-sizing: border-box;
+            }}
+            canvas {{
+                margin: 0 auto 16px auto;
+                display: block;
+                box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+                max-width: 95%;
+                background: white;
+            }}
+        </style>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    </head>
+    <body>
+        <div class="toolbar">
+            <div>📄 <strong>ตัวอย่างเล่มรายงานโครงงานอาชีพ (PDF Preview)</strong></div>
+            <div class="btn-group">
+                <button onclick="switchMode('iframe')">🖥️ โหมดมาตรฐาน (PC)</button>
+                <button onclick="switchMode('canvas')">📱 โหมดเลื่อนดูทุกหน้า (iPad / มือถือ)</button>
+                <button onclick="openFullTab()">🔍 เปิดดูเต็มจอ</button>
+            </div>
+        </div>
+        <iframe id="pdf-iframe"></iframe>
+        <div id="canvas-container">กำลังโหลดหน้ากระดาษ PDF...</div>
+
+        <script>
+            const b64Data = "{b64_pdf}";
+            const byteCharacters = atob(b64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {{
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }}
+            const byteArray = new Uint8Array(byteNumbers);
+            const pdfBlob = new Blob([byteArray], {{ type: 'application/pdf' }});
+            const blobUrl = URL.createObjectURL(pdfBlob);
+
+            const iframeEl = document.getElementById('pdf-iframe');
+            const canvasContainer = document.getElementById('canvas-container');
+            iframeEl.src = blobUrl;
+
+            let canvasRendered = false;
+
+            function openFullTab() {{
+                window.open(blobUrl, '_blank');
+            }}
+
+            function switchMode(mode) {{
+                if (mode === 'iframe') {{
+                    iframeEl.style.display = 'block';
+                    canvasContainer.style.display = 'none';
+                }} else {{
+                    iframeEl.style.display = 'none';
+                    canvasContainer.style.display = 'block';
+                    if (!canvasRendered) {{
+                        renderPdfPages();
+                    }}
+                }}
+            }}
+
+            async function renderPdfPages() {{
+                canvasRendered = true;
+                canvasContainer.innerHTML = '<div style="color:white; padding:20px;">⏳ กำลังสร้างภาพตัวอย่างทุกหน้า...</div>';
+                try {{
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                    const loadingTask = pdfjsLib.getDocument({{ data: byteArray }});
+                    const pdf = await loadingTask.promise;
+                    canvasContainer.innerHTML = '';
+                    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {{
+                        const page = await pdf.getPage(pageNum);
+                        const viewport = page.getViewport({{ scale: 1.35 }});
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+                        canvasContainer.appendChild(canvas);
+                        await page.render({{ canvasContext: context, viewport: viewport }}).promise;
+                    }}
+                }} catch (err) {{
+                    canvasContainer.innerHTML = '<div style="color:white; padding:20px;">ไม่สามารถแสดงผลโหมด Canvas ได้ กรุณากดปุ่มเปิดดูเต็มจอ</div>';
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    components.html(viewer_html, height=880, scrolling=False)
 
 # ==========================================================
 # ส่วนที่ 6: หน้าจอผู้ใช้งาน (Streamlit Web UI)
